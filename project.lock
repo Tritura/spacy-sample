@@ -1,0 +1,136 @@
+create-config:
+  cmd: python -m weasel run create-config
+  script:
+    - python -m spacy init config --lang en --pipeline ner configs/config.cfg --force
+  deps: []
+  outs:
+    - path: configs/config.cfg
+      md5: 3ca2ff69140c79dc2db551a1bc2e3b8a
+download:
+  cmd: python -m weasel run download
+  script:
+    - python -m spacy download en_core_web_md
+    - python -m weasel assets
+  deps: []
+  outs: []
+convert:
+  cmd: python -m weasel run convert
+  script:
+    - python scripts/convert_ner.py en assets/ner/train.json corpus/ner/train.spacy
+    - python scripts/convert_ner.py en assets/ner/dev.json corpus/ner/dev.spacy
+    - mkdir -p corpus/parser/UD_English-EWT
+    - python -m spacy convert assets/parser/UD_English-EWT/en_ewt-ud-train.conllu
+      corpus/parser/UD_English-EWT/ --converter conllu --n-sents 10 --merge-subtokens
+    - python -m spacy convert assets/parser/UD_English-EWT/en_ewt-ud-dev.conllu corpus/parser/UD_English-EWT/
+      --converter conllu --n-sents 10 --merge-subtokens
+    - python -m spacy convert assets/parser/UD_English-EWT/en_ewt-ud-test.conllu corpus/parser/UD_English-EWT/
+      --converter conllu --n-sents 10 --merge-subtokens
+    - mv corpus/parser/UD_English-EWT/en_ewt-ud-train.spacy corpus/parser/UD_English-EWT/train.spacy
+    - mv corpus/parser/UD_English-EWT/en_ewt-ud-dev.spacy corpus/parser/UD_English-EWT/dev.spacy
+    - mv corpus/parser/UD_English-EWT/en_ewt-ud-test.spacy corpus/parser/UD_English-EWT/test.spacy
+  deps:
+    - path: assets/ner/train.json
+      md5: 5aef985b36ab55da02fe9b06ed25a73f
+    - path: assets/ner/dev.json
+      md5: d92d6acbdbaacd11f748413cb2abbd9c
+    - path: scripts/convert_ner.py
+      md5: 26a5ca230fbbafa8c01c5c85c46bea74
+    - path: assets/parser/UD_English-EWT/en_ewt-ud-train.conllu
+      md5: 543861e84ba2d5e44244dc07b78e6bb0
+    - path: assets/parser/UD_English-EWT/en_ewt-ud-dev.conllu
+      md5: 6e3e49bd2cf587db9ad4f6cfb853f660
+    - path: assets/parser/UD_English-EWT/en_ewt-ud-test.conllu
+      md5: e3031f152c2b408f0c509d1e0bd9c955
+  outs:
+    - path: corpus/ner/train.spacy
+      md5: 568d40b80e6fe899f1562e200b0f2f28
+    - path: corpus/ner/dev.spacy
+      md5: 75dfd329dd0e6d85e51fc381af37cba9
+    - path: corpus/parser/UD_English-EWT/train.spacy
+      md5: 6cace75fe803e90696a8b201595156ad
+    - path: corpus/parser/UD_English-EWT/dev.spacy
+      md5: bfe7959a4fc664591f1529fc421c0f68
+    - path: corpus/parser/UD_English-EWT/test.spacy
+      md5: 63f3f9d53be9e45b31c223103ddb5eeb
+train-ner:
+  cmd: python -m weasel run train-ner
+  script:
+    - python -m spacy train configs/ner_config.cfg --output training/ner/ --paths.train
+      corpus/ner/train.spacy --paths.dev corpus/ner/dev.spacy --training.eval_frequency
+      10 --training.patience 50 --gpu-id -1
+  deps:
+    - path: configs/ner_config.cfg
+      md5: 75218a8a42b54ce2e20b9b18a1704441
+    - path: corpus/ner/train.spacy
+      md5: 568d40b80e6fe899f1562e200b0f2f28
+    - path: corpus/ner/dev.spacy
+      md5: 75dfd329dd0e6d85e51fc381af37cba9
+  outs:
+    - path: training/ner/model-best
+      md5: 0e2f400a7f6685648e989d0e9e2df37d
+evaluate-ner:
+  cmd: python -m weasel run evaluate-ner
+  script:
+    - python -m spacy evaluate training/ner/model-best corpus/ner/dev.spacy --output
+      training/ner/metrics.json
+  deps:
+    - path: corpus/ner/dev.spacy
+      md5: 75dfd329dd0e6d85e51fc381af37cba9
+    - path: training/ner/model-best
+      md5: 6e0b1a89a116c97766694b9ef7e27424
+  outs:
+    - path: training/ner/metrics.json
+      md5: b7be932853d5e478ae1d7d3a9ff9aba7
+train-parser:
+  cmd: python -m weasel run train-parser
+  script:
+    - python -m spacy train configs/parser_config.cfg --output training/parser --gpu-id
+      -1 --paths.train corpus/parser/UD_English-EWT/train.spacy --paths.dev corpus/parser/UD_English-EWT/dev.spacy
+      --nlp.lang=en
+  deps:
+    - path: corpus/parser/UD_English-EWT/train.spacy
+      md5: 6cace75fe803e90696a8b201595156ad
+    - path: corpus/parser/UD_English-EWT/dev.spacy
+      md5: bfe7959a4fc664591f1529fc421c0f68
+    - path: configs/parser_config.cfg
+      md5: 891ba9bf29c75f29a74e5b7c700f7f36
+  outs:
+    - path: training/parser/model-best
+      md5: f9a244bb7303d6ebc52ebd0dfdf74929
+evaluate-parser:
+  cmd: python -m weasel run evaluate-parser
+  script:
+    - python -m spacy evaluate ./training/parser/model-best ./corpus/parser/UD_English-EWT/test.spacy
+      --output training/parser/metrics.json --gpu-id -1
+  deps:
+    - path: training/parser/model-best
+      md5: e585886080c044a9328d643dfc967d6e
+    - path: corpus/parser/UD_English-EWT/test.spacy
+      md5: 63f3f9d53be9e45b31c223103ddb5eeb
+  outs:
+    - path: training/parser/metrics.json
+      md5: a70f7779f5dbb2d784ffa913111f8edf
+assemble:
+  cmd: python -m weasel run assemble
+  script:
+    - python -m spacy assemble configs/assembled.cfg training/full-pipeline --paths.ner_source
+      training/ner/model-best --paths.parser_source training/parser/model-best
+  deps:
+    - path: training/ner/model-best
+      md5: 6e0b1a89a116c97766694b9ef7e27424
+    - path: training/parser/model-best
+      md5: e585886080c044a9328d643dfc967d6e
+  outs:
+    - path: training/full-pipeline
+      md5: 035e3ece59ace661bbf2ada713fd9d42
+package:
+  cmd: python -m weasel run package
+  script:
+    - python -m spacy package training/full-pipeline packages --name demo_project
+      --version 0.0.0 --force
+  deps:
+    - path: training/full-pipeline
+      md5: 035e3ece59ace661bbf2ada713fd9d42
+  outs:
+    - path: packages/en_demo_project-0.0.0/dist/en_demo_project-0.0.0.tar.gz
+      md5: bae784c9bac010843a040f89e359a0e4

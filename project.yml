@@ -1,0 +1,150 @@
+title: "Demo pipeline with assembled components"
+description: "A minimal demo project for spaCy v3 "
+# Variables can be referenced across the project.yml using ${vars.var_name}
+vars:
+  name: "demo_project"
+  lang: "en"
+  version: "0.0.0"
+  # Set your GPU ID, -1 is CPU
+  gpu_id: -1
+  # Vectors model for train-with-vectors
+  vectors_model: "en_core_web_md"
+  ner:
+    train: "train.json"
+    dev: "dev.json"
+  parser:
+    treebank: "UD_English-EWT"
+    train_name: "en_ewt-ud-train"
+    dev_name: "en_ewt-ud-dev"
+    test_name: "en_ewt-ud-test"
+
+# These are the directories that the project needs. The project CLI will make
+# sure that they always exist.
+directories: ["assets", "assets/ner", "assets/parser", "corpus", "corpus/ner", "corpus/parser", "configs", "training", "scripts", "packages"]
+
+# Assets that should be downloaded or available in the directory. We're shipping
+# them with the project, so they won't have to be downloaded.
+assets:
+  - dest: "assets/ner/${vars.ner.train}"
+    description: "Demo NER training data"
+  - dest: "assets/ner/${vars.ner.dev}"
+    description: "Demo development data"
+  - dest: "assets/parser/${vars.parser.treebank}"
+    git:
+      repo: "https://github.com/UniversalDependencies/${vars.parser.treebank}"
+      branch: "master"
+      path: ""
+
+# Workflows are sequences of commands (see below) executed in order. You can
+# run them via "spacy project run [workflow]". If a commands's inputs/outputs
+# haven't changed, it won't be re-run.
+workflows:
+  all:
+    - download
+    - convert
+    - train-ner
+    - evaluate-ner
+    - train-parser
+    - evaluate-parser
+    - assemble
+    - package
+
+# Project commands, specified in a style similar to CI config files (e.g. Azure
+# pipelines). The name is the command name that lets you trigger the command
+# via "spacy project run [command] [path]". The help message is optional and
+# shown when executing "spacy project run [optional command] [path] --help".
+commands:
+  - name: "download"
+    help: "Download all required assets and models"
+    script:
+      - "python -m spacy download ${vars.vectors_model}"
+      - python -m weasel assets
+
+  - name: "convert"
+    help: "Convert the data to spaCy's binary format"
+    script:
+      - "python scripts/convert_ner.py ${vars.lang} assets/ner/${vars.ner.train} corpus/ner/train.spacy"
+      - "python scripts/convert_ner.py ${vars.lang} assets/ner/${vars.ner.dev} corpus/ner/dev.spacy"
+
+      - "mkdir -p corpus/parser/${vars.parser.treebank}"
+      - "python -m spacy convert assets/parser/${vars.parser.treebank}/${vars.parser.train_name}.conllu corpus/parser/${vars.parser.treebank}/ --converter conllu --n-sents 10 --merge-subtokens"
+      - "python -m spacy convert assets/parser/${vars.parser.treebank}/${vars.parser.dev_name}.conllu corpus/parser/${vars.parser.treebank}/ --converter conllu --n-sents 10 --merge-subtokens"
+      - "python -m spacy convert assets/parser/${vars.parser.treebank}/${vars.parser.test_name}.conllu corpus/parser/${vars.parser.treebank}/ --converter conllu --n-sents 10 --merge-subtokens"
+      - "mv corpus/parser/${vars.parser.treebank}/${vars.parser.train_name}.spacy corpus/parser/${vars.parser.treebank}/train.spacy"
+      - "mv corpus/parser/${vars.parser.treebank}/${vars.parser.dev_name}.spacy corpus/parser/${vars.parser.treebank}/dev.spacy"
+      - "mv corpus/parser/${vars.parser.treebank}/${vars.parser.test_name}.spacy corpus/parser/${vars.parser.treebank}/test.spacy"
+    deps:
+      - "assets/ner/${vars.ner.train}"
+      - "assets/ner/${vars.ner.dev}"
+      - "scripts/convert_ner.py"
+      - "assets/parser/${vars.parser.treebank}/${vars.parser.train_name}.conllu"
+      - "assets/parser/${vars.parser.treebank}/${vars.parser.dev_name}.conllu"
+      - "assets/parser/${vars.parser.treebank}/${vars.parser.test_name}.conllu"
+    outputs:
+      - "corpus/ner/train.spacy"
+      - "corpus/ner/dev.spacy"
+      - "corpus/parser/${vars.parser.treebank}/train.spacy"
+      - "corpus/parser/${vars.parser.treebank}/dev.spacy"
+      - "corpus/parser/${vars.parser.treebank}/test.spacy"
+
+  - name: "train-ner"
+    help: "Train the NER model"
+    script:
+      - "python -m spacy train configs/ner_config.cfg --output training/ner/ --paths.train corpus/ner/train.spacy --paths.dev corpus/ner/dev.spacy --training.eval_frequency 10 --training.patience 50 --gpu-id ${vars.gpu_id}"
+    deps:
+      - "configs/ner_config.cfg"
+      - "corpus/ner/train.spacy"
+      - "corpus/ner/dev.spacy"
+    outputs:
+      - "training/ner/model-best"
+
+  - name: "evaluate-ner"
+    help: "Evaluate the NER model and export metrics"
+    script:
+      - "python -m spacy evaluate training/ner/model-best corpus/ner/dev.spacy --output training/ner/metrics.json"
+    deps:
+      - "corpus/ner/dev.spacy"
+      - "training/ner/model-best"
+    outputs:
+      - "training/ner/metrics.json"
+
+  
+  - name: train-parser
+    help: "Train ${vars.parser.treebank}"
+    script:
+      - "python -m spacy train configs/parser_config.cfg --output training/parser --gpu-id ${vars.gpu_id} --paths.train corpus/parser/${vars.parser.treebank}/train.spacy --paths.dev corpus/parser/${vars.parser.treebank}/dev.spacy --nlp.lang=${vars.lang}"
+    deps:
+      - "corpus/parser/${vars.parser.treebank}/train.spacy"
+      - "corpus/parser/${vars.parser.treebank}/dev.spacy"
+      - "configs/parser_config.cfg"
+    outputs:
+      - "training/parser/model-best"
+
+  - name: evaluate-parser
+    help: "Evaluate on the test data and save the metrics"
+    script:
+      - "python -m spacy evaluate ./training/parser/model-best ./corpus/parser/${vars.parser.treebank}/test.spacy --output training/parser/metrics.json --gpu-id ${vars.gpu_id}"
+    deps:
+      - "training/parser/model-best"
+      - "corpus/parser/${vars.parser.treebank}/test.spacy"
+    outputs:
+      - "training/parser/metrics.json"
+
+  - name: assemble
+    help: "Assemble NER and parser models into one combined pipeline"
+    script:
+      - "python -m spacy assemble configs/assembled.cfg training/full-pipeline --paths.ner_source training/ner/model-best --paths.parser_source training/parser/model-best"
+    deps:
+      - training/ner/model-best
+      - training/parser/model-best
+    outputs:
+      - training/full-pipeline
+
+  - name: package
+    help: "Package the trained model as a pip package"
+    script:
+      - "python -m spacy package training/full-pipeline packages --name ${vars.name} --version ${vars.version} --force"
+    deps:
+      - "training/full-pipeline"
+    outputs_no_cache:
+      - "packages/${vars.lang}_${vars.name}-${vars.version}/dist/${vars.lang}_${vars.name}-${vars.version}.tar.gz"
